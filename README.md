@@ -48,10 +48,18 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 
 ## 安装方法
 
+### 一键安装（推荐）
+
+仓库中的 `install.bat` 提供了自动化安装：
+
+1. 下载 `install.bat` 和 `librustdesk.dll` 到同一目录
+2. 右键 `install.bat` → **以管理员身份运行**
+3. 脚本会自动关闭 RustDesk、备份原 DLL、安装修复版
+
 ### 快速安装（替换 DLL）
 
 1. 退出 RustDesk（右键托盘图标 → 退出）
-2. 下载本仓库 [Releases](https://github.com/你的用户名/rustdesk-clipboard-fix/releases) 中的 `librustdesk.dll`
+2. 下载本仓库 [Releases](https://github.com/chansheung/rustdesk-clipboard-fix/releases) 中的 `librustdesk.dll`
 3. 复制到 RustDesk 安装目录：
 
 ```batch
