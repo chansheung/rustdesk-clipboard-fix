@@ -1,0 +1,10 @@
+*.bak
+*.pdb
+*.exp
+*.lib
+*.d
+/build/
+/target/
+/.flowcraft/
+/tools/
+/source/
