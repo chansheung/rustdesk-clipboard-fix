@@ -1,6 +1,6 @@
-# RustDesk Clipboard Crash Fix (Windows)
+# RustDesk Windows 修复版 DLL
 
-修复 RustDesk Windows 客户端因剪贴板 HTML 格式读取超时导致闪退的问题（`0xc0000374` 堆损坏）。
+包含剪贴板崩溃修复 + 硬件编解码（H265/NVENC）支持。
 
 ---
 
@@ -8,6 +8,7 @@
 
 - [问题现象](#问题现象)
 - [根因分析](#根因分析)
+- [修复内容](#修复内容)
 - [修复方法](#修复方法)
 - [适用版本](#适用版本)
 - [安装方法](#安装方法)
@@ -15,6 +16,7 @@
   - [快速安装（替换 DLL）](#快速安装替换-dll)
   - [完整构建（从源码编译）](#完整构建从源码编译)
 - [验证修复](#验证修复)
+- [已知问题](#已知问题)
 - [相关链接](#相关链接)
 - [许可](#许可)
 
@@ -31,6 +33,23 @@
 RustDesk 使用 `arboard` 库同步剪贴板时，在 Windows 上读取 `HTML` 格式会超时（OSError 1460），该超时在特定条件下触发堆内存损坏，导致 `0xc0000374` 异常崩溃。
 
 官方 PR [#7217](https://github.com/rustdesk/rustdesk/pull/7217) 只修复了 Linux/X11 平台，Windows 平台问题至今未修复（[Issue #9222](https://github.com/rustdesk/rustdesk/issues/9222)）。
+
+## 修复内容
+
+### 1. 剪贴板崩溃修复（原）
+跳过 Windows 上 `ClipboardFormat::Html` 格式读取，避免 `OSError 1460` 超时触发 `0xc0000374` 堆损坏。
+
+### 2. C 回调 IsStopped 检查（新增）
+在 `client_format_list` C 回调入口检查 `(*context).IsStopped`，已禁用则立即返回，防止 unsafe 指针操作破坏堆。
+
+### 3. 销毁上下文而非仅设停止标志（新增）
+调用 `ContextSend::enable(false)` 彻底销毁 C 剪贴板上下文，注销所有 C 回调，而非仅设 `IsStopped = TRUE`（回调仍然注册）。
+
+### 4. stop 条件增加 disable_clipboard 检查（新增）
+文件剪贴板处理路径缺少 `disable_clipboard` 选项检查，禁用剪贴板后文件格式消息仍在处理。
+
+### 5. 日志参数顺序修正（新增）
+`io_loop.rs` 中 debug 日志参数与格式化字符串错位，误导排查。
 
 ## 修复方法
 
@@ -55,9 +74,11 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 
 ## 适用版本
 
-| 项目 | 版本 |
+| 项目 | 详情 |
 |------|------|
 | RustDesk | **1.4.6** (2026-05) |
+| DLL 大小 | 约 **33.8 MB** |
+| 导出函数 | **352+** |
 | 操作系统 | Windows 10 / Windows 11 64-bit |
 
 > ⚠️ 如果未来 RustDesk 版本更新，此 DLL 可能不兼容。需要在新版本源码上重新编译。
@@ -272,6 +293,15 @@ Get-Content "$env:APPDATA\RustDesk\log\rustdesk_rCURRENT.log" | Select-String "O
 ```
 
 如果无输出，说明修复生效。
+
+## 已知问题
+
+### Flutter 引擎 GPU 纹理渲染崩溃（与 DLL 无关）
+在极少数情况下，RustDesk 可能因 Flutter 引擎的 GPU 纹理渲染内存 bug 崩溃
+（`flutter_windows.dll` + `InternalFlutterGpu_Texture_AsImage`），
+表现为 `0xc0000374` 堆损坏或 `0xc0000005` 访问违例。
+
+**解决方法**：RustDesk → 设置 → 显示 → 关闭"GPU 纹理渲染"或"硬件解码"。
 
 ## 相关链接
 
