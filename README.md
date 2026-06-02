@@ -2,6 +2,11 @@
 
 包含剪贴板崩溃修复 + 硬件编解码（H265/NVENC）支持。
 
+> **当前版本**: v1.4.6-fix2 · **DLL SHA256**: `2469A0AE...` · **DLL 大小**: 32.24 MB
+>
+> 修复剪贴板相关的 `0xc0000374` 堆损坏崩溃，并启用 H265/NVENC 硬件编解码。
+> 已知仍存在与 Flutter 引擎 + OpenGL 渲染路径相关的偶发崩溃（详见 [已知问题](#已知问题)）。
+
 ---
 
 ## 目录
@@ -10,6 +15,7 @@
 - [根因分析](#根因分析)
 - [修复内容](#修复内容)
 - [修复方法](#修复方法)
+- [版本历史](#版本历史)
 - [适用版本](#适用版本)
 - [安装方法](#安装方法)
   - [一键安装（推荐）](#一键安装推荐)
@@ -72,14 +78,28 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 
 文字、RTF、图片复制粘贴完全正常，仅跳过极少使用的 HTML 格式。
 
+## 版本历史
+
+| 版本 | Commit | 日期 | 大小 | 说明 |
+|------|--------|------|------|------|
+| **v1.4.6-fix2** | `4404ec8` | 2026-05-28 | 32.24 MB | 5 项修复全部合入；启用 hwcodec + flutter 特性 |
+| v1.4.6-fix1 | — | 2026-05-27 | ~33.8 MB | 初步修复（后被 fix2 覆盖） |
+
+**fix1 → fix2 主要变化**：
+- 通过 `RUSTFLAGS=-Ctarget-feature=-crt-static` 解决静态/动态 CRT 链接冲突
+- vcpkg triplet 从 `x64-windows-static` 切换到 `x64-windows`，依赖安装路径相应调整
+- DLL 体积从 33.8 MB 降至 32.24 MB（更精简的依赖布局）
+
 ## 适用版本
 
 | 项目 | 详情 |
 |------|------|
 | RustDesk | **1.4.6** (2026-05) |
-| DLL 大小 | 约 **33.8 MB** |
+| DLL 大小 | **32.24 MB** |
 | 导出函数 | **352+** |
 | 操作系统 | Windows 10 / Windows 11 64-bit |
+| 编译特性 | `hwcodec` + `flutter` |
+| CRT 链接 | 动态（通过 `-Ctarget-feature=-crt-static` 移除静态 CRT） |
 
 > ⚠️ 如果未来 RustDesk 版本更新，此 DLL 可能不兼容。需要在新版本源码上重新编译。
 
@@ -238,7 +258,8 @@ call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Buil
 
 :: 2. LLVM / Clang 环境
 set LIBCLANG_PATH=C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin
-set BINDGEN_EXTRA_CLANG_ARGS=-isystem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.42.34433\include"
+:: 注意：请将 14.xx.xxxxx 替换为本地实际安装的 MSVC 版本号
+set BINDGEN_EXTRA_CLANG_ARGS=-isystem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.xx.xxxxx\include"
 
 :: 3. VCPKG
 set VCPKG_ROOT=D:\vcpkg
@@ -264,7 +285,7 @@ pause
 
 编译成功后，产物位于 `target\release\librustdesk.dll`。
 
-**文件大小**：约 **33 MB**（Release 模式）。
+**文件大小**：约 **32.24 MB**（Release 模式）。
 
 **导出函数验证**：使用 `dumpbin` 检查 DLL 导出表：
 
@@ -272,7 +293,7 @@ pause
 dumpbin /exports target\release\librustdesk.dll
 ```
 
-正常情况下应有 **350+ 个导出函数**，必须包含以下关键函数：
+正常情况下应有 **352+ 个导出函数**，必须包含以下关键函数：
 
 | 函数名 | 说明 |
 |--------|------|
@@ -296,12 +317,43 @@ Get-Content "$env:APPDATA\RustDesk\log\rustdesk_rCURRENT.log" | Select-String "O
 
 ## 已知问题
 
-### Flutter 引擎 GPU 纹理渲染崩溃（与 DLL 无关）
-在极少数情况下，RustDesk 可能因 Flutter 引擎的 GPU 纹理渲染内存 bug 崩溃
-（`flutter_windows.dll` + `InternalFlutterGpu_Texture_AsImage`），
-表现为 `0xc0000374` 堆损坏或 `0xc0000005` 访问违例。
+### Flutter 引擎 + OpenGL 渲染路径偶发崩溃（与本 DLL 无关）
 
-**解决方法**：RustDesk → 设置 → 显示 → 关闭"GPU 纹理渲染"或"硬件解码"。
+经过对 `rustdesk.exe.15352.dmp`（2026-06-01 02:02:20 生成）的 WinDbg 分析，崩溃调用栈如下：
+
+```
+#00 ntdll.dll+0xff349       ← RtlpHeapCorruptionErrorHandler
+#01 ntdll.dll+0xff313       ← RtlpReportHeapFailure
+#02 ntdll.dll+0x14762c      ← RtlpHpHeapHandleDataException
+#03 opengl32.dll+0xddbf0    ← OpenGL 调用
+#04 ntdll.dll+0x247b1
+#05 gdi32full.dll+0x574e3   ← GDI 渲染
+#06 opengl32.dll+0x71d3
+...
+#14 flutter_windows.dll+0x4da8fc  ← Flutter 渲染引擎
+...
+#29 flutter_windows.dll+0x7cacec
+```
+
+**结论**：
+- 崩溃路径 `flutter_windows.dll → opengl32.dll → gdi32full.dll → ntdll 堆检测`
+- `librustdesk.dll` **不在**崩溃调用栈中
+- 已加载模块中只有 `rustdesk.exe` 和几个 Flutter plugin DLL
+- 涉及 NVIDIA 驱动 `nvwgf2umx.dll`，与 GPU 渲染路径相关
+
+这是 **Flutter 引擎通过 OpenGL 后端进行 GPU 渲染时的内存管理 bug**（或 NVIDIA 驱动问题），触发堆损坏，被 ntdll 堆管理器检测到后抛出 `0xc0000374`。由于崩溃不在 `librustdesk.dll` 中，本仓库的代码修复无法消除此类崩溃。
+
+**临时解决方法**：RustDesk → 设置 → 显示 → 关闭"GPU 纹理渲染"或"硬件解码"。
+
+**根本解决方法**：等待 RustDesk 官方更新 Flutter 版本，或 NVIDIA 更新驱动。
+
+### 其他偶发错误（可忽略）
+
+日志中偶尔出现：
+- `Failed to connect to 192.168.x.x:21118` — RustDesk ID 服务器连接失败
+- `Failed to connect to <relay>:61115` — 中继服务器连接失败
+
+这些是网络问题（防火墙、ISP 阻塞或服务器临时不可用），与本 DLL 无关。
 
 ## 相关链接
 
