@@ -1,10 +1,10 @@
 # RustDesk Windows 修复版 DLL
 
-包含剪贴板崩溃修复 + 硬件编解码（H265/NVENC）支持。
+包含剪贴板崩溃修复 + Explorer 卡死修复 + 硬件编解码（H265/NVENC）支持。
 
-> **当前版本**: v1.4.6-fix2 · **DLL SHA256**: `2469A0AE...` · **DLL 大小**: 32.24 MB
+> **当前版本**: v1.4.6-fix6 · **DLL SHA256**: `E911B90344FC4803E5BE1885698D3B990C5076EA330CEFF3ACDE3C26C2BF4CD0` · **DLL 大小**: 32.19 MB
 >
-> 修复剪贴板相关的 `0xc0000374` 堆损坏崩溃，并启用 H265/NVENC 硬件编解码。
+> 修复剪贴板相关的 `0xc0000374` 堆损坏崩溃，解决复制文件导致 Explorer 卡死的问题，并启用 H265/NVENC 硬件编解码。
 > 已知仍存在与 Flutter 引擎 + OpenGL 渲染路径相关的偶发崩溃（详见 [已知问题](#已知问题)）。
 
 ---
@@ -31,6 +31,7 @@
 ## 问题现象
 
 - RustDesk 不定时闪退，需要重新打开
+- 在文件资源管理器中复制文件（Ctrl+C）会导致 explorer.exe 卡死 30-60 秒
 - 事件查看器中看到错误：`0xc0000374`（HEAP_CORRUPTION），崩溃模块 `ntdll.dll`
 - 日志中大量出现：`OSError(1460): 由于超时时间已过，该操作返回。`
 
@@ -38,7 +39,7 @@
 
 RustDesk 使用 `arboard` 库同步剪贴板时，在 Windows 上读取 `HTML` 格式会超时（OSError 1460），该超时在特定条件下触发堆内存损坏，导致 `0xc0000374` 异常崩溃。
 
-官方 PR [#7217](https://github.com/rustdesk/rustdesk/pull/7217) 只修复了 Linux/X11 平台，Windows 平台问题至今未修复（[Issue #9222](https://github.com/rustdesk/rustdesk/issues/9222)）。
+此外，RustDesk 的 C 侧 cliprdr 线程通过 `AddClipboardFormatListener` 注册剪贴板通知，在 `WM_CLIPBOARDUPDATE` 窗口过程中同步调用 `OpenClipboard()`，阻塞 explorer.exe 的 `SendMessage`，导致复制文件时 explorer 卡死 30-60 秒（详见 [技术分析文档](技术分析-Explorer卡死根因与修复方案.md)）。
 
 ## 修复内容
 
@@ -54,8 +55,11 @@ RustDesk 使用 `arboard` 库同步剪贴板时，在 Windows 上读取 `HTML` �
 ### 4. stop 条件增加 disable_clipboard 检查（新增）
 文件剪贴板处理路径缺少 `disable_clipboard` 选项检查，禁用剪贴板后文件格式消息仍在处理。
 
-### 5. 日志参数顺序修正（新增）
+### 5. 日志参数顺序修正（v1.4.6-fix2 新增）
 `io_loop.rs` 中 debug 日志参数与格式化字符串错位，误导排查。
+
+### 6. 阻止 C 侧 cliprdr 线程启动（v1.4.6-fix6 新增）
+在 `ContextSend::enable()` 和 `make_sure_enabled()` 中对 Windows 平台直接返回 `Ok(())`，不创建 cliprdr context。这样 C 侧 `init_cliprdr()` 永远不会被调用，`AddClipboardFormatListener` 永远不注册，从根本上消除了复制文件导致 Explorer 卡死的问题（详见 [技术分析](技术分析-Explorer卡死根因与修复方案.md)）。
 
 ## 修复方法
 
@@ -82,8 +86,14 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 
 | 版本 | Commit | 日期 | 大小 | 说明 |
 |------|--------|------|------|------|
-| **v1.4.6-fix2** | `4404ec8` | 2026-05-28 | 32.24 MB | 5 项修复全部合入；启用 hwcodec + flutter 特性 |
+| **v1.4.6-fix6** | — | 2026-06-06 | 32.19 MB | 新增 Explorer 卡死修复（方案 A：阻止 C 侧 cliprdr 线程启动） |
+| v1.4.6-fix2 | `4404ec8` | 2026-05-28 | 32.24 MB | 5 项修复全部合入；启用 hwcodec + flutter 特性 |
 | v1.4.6-fix1 | — | 2026-05-27 | ~33.8 MB | 初步修复（后被 fix2 覆盖） |
+
+**fix2 → fix6 主要变化**：
+- 在 `ContextSend::enable()` 和 `make_sure_enabled()` 中对 Windows 平台直接返回 `Ok(())`，阻止 C 侧 cliprdr 线程启动
+- 从根本上消除了复制文件导致 Explorer 卡死的问题
+- 文字剪贴板通过 arboard 正常工作，不受影响
 
 **fix1 → fix2 主要变化**：
 - 通过 `RUSTFLAGS=-Ctarget-feature=-crt-static` 解决静态/动态 CRT 链接冲突
@@ -95,7 +105,7 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
 | 项目 | 详情 |
 |------|------|
 | RustDesk | **1.4.6** (2026-05) |
-| DLL 大小 | **32.24 MB** |
+| DLL 大小 | **32.19 MB** |
 | 导出函数 | **352+** |
 | 操作系统 | Windows 10 / Windows 11 64-bit |
 | 编译特性 | `hwcodec` + `flutter` |
@@ -307,13 +317,15 @@ dumpbin /exports target\release\librustdesk.dll
 
 ## 验证修复
 
-安装后检查日志是否还有 OSError 1460 错误：
+1. 安装后检查日志是否还有 OSError 1460 错误：
 
 ```powershell
 Get-Content "$env:APPDATA\RustDesk\log\rustdesk_rCURRENT.log" | Select-String "OSError"
 ```
 
 如果无输出，说明修复生效。
+
+2. 在文件资源管理器中复制文件（Ctrl+C），确认 explorer.exe 不再卡死。
 
 ## 已知问题
 
@@ -358,6 +370,7 @@ Get-Content "$env:APPDATA\RustDesk\log\rustdesk_rCURRENT.log" | Select-String "O
 ## 相关链接
 
 - [RustDesk GitHub](https://github.com/rustdesk/rustdesk)
+- [技术分析：Explorer 卡死根因与修复方案](技术分析-Explorer卡死根因与修复方案.md)
 - [Issue #9222 - timeout of copy past](https://github.com/rustdesk/rustdesk/issues/9222)
 - [PR #7217 - Fix/arboard clipboard context timeout](https://github.com/rustdesk/rustdesk/pull/7217)
 
